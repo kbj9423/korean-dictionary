@@ -33,8 +33,11 @@
    ```
    KRDICT_API_KEY=발급받은키
    ```
-2. 실행합니다. (`openpyxl` 필요)
+2. (권장) 한국어기초사전 누리집 하단의 "사전 전체 내려받기" XML 파일들을 `data/krdict/`에 넣습니다.
+   같은 파일을 모아 둔 [spellcheck-ko/korean-dict-nikl](https://github.com/spellcheck-ko/korean-dict-nikl)의 `krdict/*.xml`을 받아도 됩니다.
+   이 파일이 있으면 API를 부르지 않고 파일에서 뜻을 찾습니다. (API는 짧은 시간에 많이 부르면 접속이 한동안 막힙니다.)
+3. 실행합니다. (`openpyxl` 필요)
    ```
    python scripts/build_words.py
    ```
-   중간에 멈춰도 다시 실행하면 이어서 진행합니다.
+   API로 조회할 때는 중간에 멈춰도 다시 실행하면 이어서 진행합니다.

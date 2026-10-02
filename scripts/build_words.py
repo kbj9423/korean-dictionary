@@ -4,6 +4,7 @@
 - API 키는 프로젝트 루트 .env 의 KRDICT_API_KEY 에서 읽는다.
 - API 응답은 data/cache/krdict.json 에 저장되어, 중간에 멈춰도 다시 실행하면 이어서 진행한다.
 """
+import io
 import json
 import re
 import sys
@@ -21,6 +22,7 @@ CACHE = ROOT / "data/cache/krdict.json"
 OUT = ROOT / "words.json"
 GRADES = 4
 API = "https://krdict.korean.go.kr/api/search"
+XML_DIR = ROOT / "data/krdict"  # 한국어기초사전 '사전 전체 내려받기' XML (있으면 API 대신 사용)
 LEVELS = [("중간", {3}), ("쉬움", {1, 2}), ("어려움", {4})]
 # 실패 시 기다릴 시간(초). 서버 차단이 풀릴 때까지 몇 시간 동안 다시 시도한다.
 WAITS = [60, 300, 900] + [1800] * 12
@@ -67,6 +69,26 @@ def fetch(key, word):
             for it in root.iter("item") if it.findtext("word") == word]
 
 
+def load_xml(words):
+    """한국어기초사전 '사전 전체 내려받기' XML에서 명사 항목을 단어별 [(원어, 첫 뜻)]으로 모은다."""
+    found = {w: [] for w in words}
+    for path in sorted(XML_DIR.glob("*.xml")):
+        # 원본 일부 번역 문장에 XML에서 허용하지 않는 제어 문자가 섞여 있어 지우고 읽는다.
+        data = re.sub(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]", b"", path.read_bytes())
+        for _, el in ET.iterparse(io.BytesIO(data)):
+            if el.tag != "LexicalEntry":
+                continue
+            feat = {f.get("att"): f.get("val") for f in el.findall("feat")}
+            lemma = el.find("Lemma/feat[@att='writtenForm']")
+            word = lemma.get("val") if lemma is not None else ""
+            if word in found and feat.get("partOfSpeech") == "명사":
+                d = el.find("Sense/feat[@att='definition']")  # Sense 바로 아래 뜻만 (외국어 번역 뜻 제외)
+                found[word].append((int(feat.get("homonym_number") or 0), feat.get("origin") or "",
+                                    d.get("val").strip() if d is not None else ""))
+            el.clear()
+    return {w: [[o, d] for _, o, d in sorted(items)] for w, items in found.items()}
+
+
 def pick(items, origin):
     """원어(한자)가 같은 항목을 우선 고르고, 없으면 첫 항목을 쓴다."""
     for o, d in items:
@@ -92,6 +114,10 @@ def main():
     key = load_key()
     words = load_words()
     cache = json.loads(CACHE.read_text(encoding="utf-8")) if CACHE.exists() else {}
+    if any(XML_DIR.glob("*.xml")):
+        print("data/krdict 의 한국어기초사전 전체 XML에서 뜻을 찾습니다.", flush=True)
+        for w, items in load_xml(words).items():
+            cache.setdefault(w, items)
     print(f"단어 {len(words)}개, 새로 조회할 단어 {sum(w not in cache for w in words)}개", flush=True)
 
     # 동시에 여러 번 요청하면 서버가 접속을 막으므로, 하나씩 쉬어 가며 요청하고 실패하면 기다렸다 다시 시도한다.
