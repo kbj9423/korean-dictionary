@@ -21,6 +21,9 @@ CACHE = ROOT / "data/cache/krdict.json"
 OUT = ROOT / "words.json"
 GRADES = 4
 API = "https://krdict.korean.go.kr/api/search"
+LEVELS = [("중간", {3}), ("쉬움", {1, 2}), ("어려움", {4})]
+# 실패 시 기다릴 시간(초). 서버 차단이 풀릴 때까지 몇 시간 동안 다시 시도한다.
+WAITS = [60, 300, 900] + [1800] * 12
 
 
 def load_key():
@@ -72,33 +75,9 @@ def pick(items, origin):
     return items[0][1] if items else ""
 
 
-def main():
-    key = load_key()
-    words = load_words()
-    cache = json.loads(CACHE.read_text(encoding="utf-8")) if CACHE.exists() else {}
-    todo = [w for w in words if w not in cache]
-    print(f"단어 {len(words)}개, 새로 조회할 단어 {len(todo)}개")
-
-    # 동시에 여러 번 요청하면 서버가 접속을 막으므로, 하나씩 쉬어 가며 요청하고 실패하면 기다렸다 다시 시도한다.
-    CACHE.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        for i, w in enumerate(todo, 1):
-            for wait in (60, 180, 600, 1800):
-                try:
-                    cache[w] = fetch(key, w)
-                    break
-                except (OSError, ET.ParseError) as e:
-                    print(f"  '{w}' 실패({e}), {wait}초 뒤 다시 시도", flush=True)
-                    time.sleep(wait)
-            else:
-                sys.exit("서버가 계속 응답하지 않아 멈춥니다. 나중에 다시 실행하면 이어서 진행합니다.")
-            time.sleep(0.4)
-            if i % 100 == 0:
-                CACHE.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
-                print(f"  {i}/{len(todo)}", flush=True)
-    finally:
-        CACHE.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
-
+def save(words, cache):
+    """조회 결과를 저장하고, 기초사전 뜻이 있으면 그 뜻을, 없으면 표준국어대사전 뜻을 넣어 words.json을 만든다."""
+    CACHE.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
     out, basic = [], 0
     for w in sorted(words):
         info = words[w]
@@ -106,7 +85,40 @@ def main():
         basic += bool(meaning)
         out.append([w, info["grade"], meaning or info["std"]])
     OUT.write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    print(f"완료: {len(out)}개 저장 (기초사전 뜻 {basic}개, 표준국어대사전 뜻 {len(out) - basic}개)")
+    return basic
+
+
+def main():
+    key = load_key()
+    words = load_words()
+    cache = json.loads(CACHE.read_text(encoding="utf-8")) if CACHE.exists() else {}
+    print(f"단어 {len(words)}개, 새로 조회할 단어 {sum(w not in cache for w in words)}개", flush=True)
+
+    # 동시에 여러 번 요청하면 서버가 접속을 막으므로, 하나씩 쉬어 가며 요청하고 실패하면 기다렸다 다시 시도한다.
+    # 난이도 순서: 중간 → 쉬움 → 어려움. 난이도 하나가 끝날 때마다 words.json을 갱신한다.
+    CACHE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        for name, grades in LEVELS:
+            todo = [w for w in words if words[w]["grade"] in grades and w not in cache]
+            print(f"[{name}] 새로 조회할 단어 {len(todo)}개", flush=True)
+            for i, w in enumerate(todo, 1):
+                for wait in WAITS:
+                    try:
+                        cache[w] = fetch(key, w)
+                        break
+                    except (OSError, ET.ParseError) as e:
+                        print(f"  '{w}' 실패({e}), {wait}초 뒤 다시 시도", flush=True)
+                        time.sleep(wait)
+                else:
+                    sys.exit("서버가 계속 응답하지 않아 멈춥니다. 나중에 다시 실행하면 이어서 진행합니다.")
+                time.sleep(1)
+                if i % 100 == 0:
+                    CACHE.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+                    print(f"  [{name}] {i}/{len(todo)}", flush=True)
+            print(f"[{name}] 완료: 전체 기초사전 뜻 {save(words, cache)}개", flush=True)
+    finally:
+        basic = save(words, cache)
+    print(f"완료: {len(words)}개 저장 (기초사전 뜻 {basic}개, 표준국어대사전 뜻 {len(words) - basic}개)")
 
 
 if __name__ == "__main__":
